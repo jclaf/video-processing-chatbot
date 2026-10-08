@@ -5,5 +5,5 @@ backend/media
 backend/__pycache__
 
 backend/chatbot.db
-backend/chatbotdb-shm
-backend/chatbotdb-wal
+backend/chatbot.db-shm
+backend/chatbot.db-wal
