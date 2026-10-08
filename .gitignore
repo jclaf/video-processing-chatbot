@@ -1,0 +1,9 @@
+backend/media
+.video-IA
+.env
+
+backend/__pycache__
+
+backend/chatbot.db
+backend/chatbotdb-shm
+backend/chatbotdb-wal
