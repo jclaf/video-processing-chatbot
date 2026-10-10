@@ -6,19 +6,10 @@ API = os.getenv("API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="Video Chatbot", page_icon="🎬", layout="wide")
 
-IMAGE_MODES = {
-    "Animer l'image (1re = début, 2e = fin)": "first_frame",
-    "Image(s) de référence (style / contenu)": "reference",
-}
 
 def api(method: str, path: str, **kw):
     r = requests.request(method, f"{API}{path}", timeout=300, **kw)
-    if not r.ok:
-        try:
-            detail = r.json().get("detail", r.text)
-        except ValueError:
-            detail = r.text
-        raise RuntimeError(f"Erreur API {r.status_code} : {detail}")
+    r.raise_for_status()
     return r.json()
 
 
@@ -47,22 +38,7 @@ with st.sidebar:
                 st.session_state.pop("conv_id", None)
                 st.session_state.pop("messages", None)
             st.rerun()
-    st.divider()
-    mode_label = st.radio("Si tu joins des images", list(IMAGE_MODES), key="image_mode_label")
-    st.caption("Pour garder un personnage d'une vidéo à l'autre, joins son image et écris « avec cet avatar ».")
- 
-    if st.session_state.get("conv_id"):
-        av = api("GET", f"/conversations/{st.session_state.conv_id}/avatar")
-        if av["image_urls"]:
-            st.divider()
-            st.subheader("Avatar de la conversation")
-            st.image(av["image_urls"], width=100)
-            if av["description"]:
-                st.caption(av["description"])
-            if st.button("Retirer l'avatar", use_container_width=True):
-                api("DELETE", f"/conversations/{st.session_state.conv_id}/avatar")
-                st.rerun()
-                
+
 # --- Zone de chat ---
 if "conv_id" not in st.session_state:
     open_conversation(api("POST", "/conversations")["id"])
@@ -73,8 +49,6 @@ st.header("Créateur de vidéos")
 def render(m: dict):
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
-        if m.get("image_urls"):
-            st.image(m["image_urls"], width=160)
         if m.get("video_url"):
             st.video(m["video_url"])
         if m.get("audio_url"):
@@ -84,83 +58,30 @@ def render(m: dict):
 for m in st.session_state.messages:
     render(m)
 
-# --- Plan multi-scènes : validation du coût puis suivi de la production ---
-STATUS_ICON = {"pending": "🕓", "submitted": "⏳", "completed": "✅", "failed": "❌"}
-
-def cost_text(plan: dict) -> str:
-    low, high = plan.get("est_low"), plan.get("est_high")
-    if low is None or high is None:
-        return "Coût non estimable"
-    if high == 0:
-        return "Coût estimé : 0 $ (mode mock)"
-    if low == high:
-        return f"Coût estimé : ≈ {low:.2f} $"
-    return f"Coût estimé : entre {low:.2f} et {high:.2f} $"
-
-try:
-    _first = api("GET", f"/conversations/{st.session_state.conv_id}/plan")
-except RuntimeError:
-    _first = {"status": None}
-_poll = 5 if _first.get("status") == "running" else None   # on ne sonde l'API que pendant une production
-
-@st.fragment(run_every=_poll)
-def plan_panel():
-    conv_id = st.session_state.conv_id
-    plan = api("GET", f"/conversations/{conv_id}/plan")
-    status = plan.get("status")
- 
-    # Production terminée : recharge la conversation (les scènes y ont été ajoutées)
-    if st.session_state.get("watch_plan") == plan.get("id") and status in ("done", "failed"):
-        st.session_state.pop("watch_plan")
-        st.session_state.messages = api("GET", f"/conversations/{conv_id}/messages")
-        st.rerun()
- 
-    if status == "awaiting_approval":
-        with st.container(border=True):
-            st.markdown(f"**Plan en attente de validation** : {plan['total']} scène(s)")
-            st.caption(cost_text(plan))
-            c1, c2 = st.columns(2)
-            if c1.button("✅ Lancer la production", type="primary", use_container_width=True, key="plan_ok"):
-                try:
-                    api("POST", f"/conversations/{conv_id}/plan/approve")
-                    st.session_state.watch_plan = plan["id"]
-                    st.rerun()
-                except RuntimeError as e:
-                    st.error(str(e))
-            if c2.button("❌ Annuler", use_container_width=True, key="plan_cancel"):
-                api("POST", f"/conversations/{conv_id}/plan/cancel")
-                st.rerun()
-    elif status == "running":
-        st.session_state.watch_plan = plan["id"]
-        with st.container(border=True):
-            st.markdown(f"**Production en cours** : {plan['done']}/{plan['total']} scène(s) terminée(s)")
-            st.progress(plan["done"] / max(plan["total"], 1))
-            st.caption("  ".join(f"{STATUS_ICON.get(sc['status'], '⏳')} {sc['index']}" for sc in plan["scenes"]))
- 
- 
-plan_panel()
-
 prompt = st.chat_input("Décris ta vidéo, ta voix off ou ta musique…", accept_file="multiple", file_type=["png", "jpg", "pdf", "csv"])
 
-if prompt:
-    text = (prompt.get("text") or "").strip()
-    files = prompt.get("files") or []
-    if not text:
-        st.warning("Ajoute un texte pour décrire ta demande (avec ou sans images).")
+if prompt and prompt.text:
+    text_part = prompt.text.strip() if prompt.text else ""
+    file_names = [f.name for f in prompt.files] if prompt.files else []
     
-    user_msg = {"role": "user", "content": text,"image_urls": [f.getvalue() for f in files]}
+    if text_part and file_names:
+        display_text = f"{text_part}\n\n📎 **Fichiers joints ({len(file_names)}) :** " + ", ".join(file_names)
+    elif text_part:
+        display_text = text_part
+    
+    user_msg = {"role": "user", "content": display_text}
 
     st.session_state.messages.append(user_msg)
     render(user_msg)
-    try:
-        with st.spinner("Je réfléchis…"):
-            reply = api(
-                "POST",
-                f"/conversations/{st.session_state.conv_id}/chat",
-                data={"message": text, "image_mode": IMAGE_MODES[mode_label]},
-                files=[("images", (f.name, f.getvalue(), f.type)) for f in files],
-            )
-        st.session_state.messages.extend(reply["messages"])
-    except RuntimeError as e:
-        st.session_state.messages.append({"role": "assistant", "content": f"⚠️ {e}"})
+    with st.spinner("Je réfléchis…"):
+        payload = {
+            "message": text_part, 
+            "has_files": len(file_names) > 0, 
+            "filenames": file_names
+            }
+        reply = api("POST", f"/conversations/{st.session_state.conv_id}/chat", json=payload)
+    st.session_state.messages.extend(reply["messages"])
     st.rerun()
+elif prompt and prompt.files and not (prompt.text and prompt.text.strip()):
+    # Optionnel : Afficher un avertissement si l'utilisateur essaie d'envoyer uniquement des fichiers
+    st.warning("Veuillez ajouter un texte pour décrire votre fichier ou votre demande.")
