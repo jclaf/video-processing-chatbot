@@ -62,7 +62,53 @@ with st.sidebar:
             if st.button("Retirer l'avatar", use_container_width=True):
                 api("DELETE", f"/conversations/{st.session_state.conv_id}/avatar")
                 st.rerun()
-                
+with st.sidebar:
+    st.divider()
+    with st.expander("⚙️ Paramètres avancés"):
+        # Récupère les réglages actuels de l'API
+        try:
+            cfg = api("GET", "/settings")
+        except Exception:
+            cfg = {}
+            
+        new_max_scenes = st.slider("Max scènes", 1, 15, cfg.get("max_scenes", 8))
+        new_max_parallel = st.number_input("Max parallèles", value=int(cfg.get("max_parallel_scenes", 10)))
+        new_max_cost = st.number_input("Plafond de coût ($)", value=float(cfg.get("max_plan_cost_usd", 10.0)))
+        
+        st.divider()
+        new_resolution = st.text_input(
+            "Résolution vidéo", 
+            value=str(cfg.get("video_resolution", "768p")),
+            help="Exemples selon les modèles : 480p, 768p, 1080p, etc."
+        )
+        new_aspect = st.text_input(
+            "Format d'image (Aspect Ratio)", 
+            value=str(cfg.get("video_aspect_ratio", "9:16")),
+            help="Exemples : 9:16, 16:9, 1:1"
+        )
+        st.divider()
+        new_editor = st.checkbox("Activer l'Agent Éditeur", value=bool(cfg.get("editor_agent", False)))
+        new_transition = st.selectbox("Transition par défaut", ["cut", "fade", "fadeblack", "dissolve", "wipeleft", "slideleft"], index=["cut", "fade", "fadeblack", "dissolve", "wipeleft", "slideleft"].index(cfg.get("transition", "cut")))
+        new_td = st.number_input("Durée transition (s)", value=float(cfg.get("transition_duration_s", 0.5)))
+        new_duck = st.slider("Ducking narration", 0.0, 1.0, float(cfg.get("narration_ducking", 0.25)))
+        
+        if st.button("Enregistrer les modifications"):
+            payload = {
+                "max_scenes": int(new_max_scenes),
+                "max_parallel_scenes": int(new_max_parallel),
+                "max_plan_cost_usd": float(new_max_cost),
+                "video_resolution": new_resolution,
+                "video_aspect_ratio": new_aspect,
+                "editor_agent": new_editor,
+                "transition": new_transition,
+                "transition_duration_s": float(new_td),
+                "narration_ducking": float(new_duck),
+            }
+            try:
+                api("POST", "/settings", json=payload)
+                st.success("Paramètres mis à jour à chaud !")
+            except RuntimeError as e:
+                st.error(str(e))       
 # --- Zone de chat ---
 if "conv_id" not in st.session_state:
     open_conversation(api("POST", "/conversations")["id"])
@@ -76,7 +122,12 @@ def render(m: dict):
         if m.get("image_urls"):
             st.image(m["image_urls"], width=160)
         if m.get("video_url"):
-            st.video(m["video_url"])
+            _, col_center, _ = st.columns([1, 2, 1])
+            with col_center:
+                with st.container(border=True):
+                    _, col_vid, _ = st.columns([1, 3, 1])
+                    with col_vid:
+                        st.video(m["video_url"], width=450)
         if m.get("audio_url"):
             st.audio(m["audio_url"])
 

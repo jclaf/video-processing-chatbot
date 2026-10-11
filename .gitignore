@@ -4,6 +4,6 @@ backend/media
 
 backend/__pycache__
 
-backend/chatbot.db
-backend/chatbot.db-shm
-backend/chatbot.db-wal
+backend/data/
+backend/agents/__pycache__
+backend/utils/__pycache__

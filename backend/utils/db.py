@@ -7,10 +7,15 @@ import os
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-DB_PATH = os.getenv("DB_PATH", "chatbot.db")
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+DB_PATH = DATA_DIR / os.getenv("DB_PATH", "chatbot.db")
+
 DEFAULT_TITLE = "Nouvelle conversation"
 
 _con = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -56,7 +61,9 @@ _run("""CREATE TABLE IF NOT EXISTS plans (
     est_high REAL,
     use_avatar INTEGER DEFAULT 0,
     avatar_desc TEXT,
-    created_at REAL
+    created_at REAL,
+    images TEXT,
+    edit_style TEXT
 )""")
 _run("""CREATE TABLE IF NOT EXISTS scene_jobs (
     plan_id TEXT NOT NULL,
@@ -73,7 +80,10 @@ _cols = {r[1] for r in _query("PRAGMA table_info(conversations)")}
 for _col in ("last_job_id", "avatar_files", "avatar_desc"):
     if _col not in _cols:
         _run(f"ALTER TABLE conversations ADD COLUMN {_col} TEXT")
-
+_plan_cols = {r[1] for r in _query("PRAGMA table_info(plans)")}
+for _col in ("images", "edit_style"):
+    if _col not in _plan_cols:
+        _run(f"ALTER TABLE plans ADD COLUMN {_col} TEXT")
 
 # ---------- conversations ----------
 def create_conversation(conv_id: str) -> None:
@@ -133,24 +143,26 @@ def delete_conversation(conv_id: str) -> None:
 
 # ---------- plans multi-scènes ----------
 # statuts : awaiting_approval -> running -> done | failed   (ou cancelled)
-_PLAN_COLS = "id, conv_id, status, title, scenes, est_low, est_high, use_avatar, avatar_desc, created_at"
+_PLAN_COLS = "id, conv_id, status, title, scenes, est_low, est_high, use_avatar, avatar_desc, created_at, images, edit_style"
 
 
 def _plan(r) -> dict:
     return {
         "id": r[0], "conv_id": r[1], "status": r[2], "title": r[3], "scenes": json.loads(r[4] or "[]"),
         "est_low": r[5], "est_high": r[6], "use_avatar": bool(r[7]), "avatar_desc": r[8], "created_at": r[9],
+        "images": json.loads(r[10] or "[]"),   # fichiers (MEDIA_DIR) des images jointes à la demande, dans l'ordre
+        "edit_style": r[11],                   # style de montage demandé (« transitions fluides »...)
     }
 
 
 def create_plan(plan_id: str, conv_id: str, title: str, scenes: list[dict], est_low: float | None,
-                est_high: float | None, use_avatar: bool, avatar_desc: str | None) -> None:
+                est_high: float | None, use_avatar: bool, avatar_desc: str | None, images: list[str] | None = None, edit_style: str | None = None) -> None:
     """Crée un plan en attente de validation (remplace le plan précédemment en attente)."""
     _run("UPDATE plans SET status = 'cancelled' WHERE conv_id = ? AND status = 'awaiting_approval'", (conv_id,))
     _run(
-        f"INSERT INTO plans ({_PLAN_COLS}) VALUES (?, ?, 'awaiting_approval', ?, ?, ?, ?, ?, ?, ?)",
+        f"INSERT INTO plans ({_PLAN_COLS}) VALUES (?, ?, 'awaiting_approval',  ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (plan_id, conv_id, title, json.dumps(scenes, ensure_ascii=False), est_low, est_high,
-         int(use_avatar), avatar_desc, time.time()),
+         int(use_avatar), avatar_desc, json.dumps(images, ensure_ascii=False) if images else None, edit_style, time.time()),
     )
 
 
